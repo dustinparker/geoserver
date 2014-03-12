@@ -6,7 +6,7 @@
 package org.geoserver.wfs.notification;
 
 
-public interface PublishCallbackMBean {
+public interface GMLNotificationSerializerMBean {
     public void resetStats();
     public long getUpdates();
     public long getDeletes();

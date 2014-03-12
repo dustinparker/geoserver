@@ -5,7 +5,6 @@
 
 package org.geoserver.wfs.notification;
 
-import java.io.IOException;
 import java.io.StringReader;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -33,12 +32,6 @@ import org.apache.commons.logging.LogFactory;
 import org.eclipse.xsd.XSDSchema;
 import org.eclipse.xsd.XSDTypeDefinition;
 import org.geoserver.catalog.Catalog;
-import org.geoserver.catalog.CatalogException;
-import org.geoserver.catalog.event.CatalogAddEvent;
-import org.geoserver.catalog.event.CatalogListener;
-import org.geoserver.catalog.event.CatalogModifyEvent;
-import org.geoserver.catalog.event.CatalogPostModifyEvent;
-import org.geoserver.catalog.event.CatalogRemoveEvent;
 import org.geoserver.wfs.WFSException;
 import org.geotools.gml3.GML;
 import org.geotools.math.Statistics;
@@ -50,47 +43,14 @@ import org.opengis.filter.identity.Identifier;
 import org.xml.sax.helpers.DefaultHandler;
 import org.xml.sax.helpers.NamespaceSupport;
 
-public class GMLNotificationSerializer implements PublishCallbackMBean, CatalogListener, NotificationSerializer {
+public class GMLNotificationSerializer implements GMLNotificationSerializerMBean, NotificationSerializer {
     private static final Log LOG = LogFactory.getLog(GMLNotificationSerializer.class);
     private static final SAXTransformerFactory STF = (SAXTransformerFactory) TransformerFactory.newInstance();
     private static final boolean isDebug = Boolean.parseBoolean(System.getProperty("com.fsi.c2rpc.geoserver.wsn.PublishCallback.debug"));
 
     private final Catalog catalog;
     private final Configuration xmlConfig;
-    private AtomicLong catalogModCount = new AtomicLong(0);
-    
-    private final ThreadLocal<Long> catalogModCountLocal = new ThreadLocal<Long>() {
-        @Override
-        protected Long initialValue() {
-            return 0L;
-        }
-    };
-    
-    private final ThreadLocal<Encoder> encoder = new ThreadLocal<Encoder>() {
-        @Override
-        protected Encoder initialValue() {
-            try {
-                // TODO: Get this patch into GeoTools?
-                Encoder enc = new Encoder(xmlConfig, xmlConfig.getXSD().getSchema()) /* {
-                    {
-                        // setResuseIndex(true);
-                    }
-                    protected void resetContext(MutablePicoContainer context) {
-                        context.unregisterComponent(XSDIdRegistry.class);
-                        context.registerComponentInstance(new XSDIdRegistry());
-                    }
-                    
-                    protected void clearContext(MutablePicoContainer context) {
-                    };
-                };
-                enc.setResuseIndex(true) */;
-                return enc;
-            } catch(IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-    };
-    
+
     // Reporting stuff
     private ConcurrentHashMap<Name, Statistics> serializationMillisByType;
     private Statistics serializationMillis;
@@ -176,7 +136,7 @@ public class GMLNotificationSerializer implements PublishCallbackMBean, CatalogL
 
     private static void loadNamespaceBindings(NamespaceSupport nss, XSDSchema schema, XSDSchema exclude) {
         Map excludePrefixes = exclude.getQNamePrefixToNamespaceMap();
-        for(Map.Entry<String, String> e : ((Map<String,String>)schema.getQNamePrefixToNamespaceMap()).entrySet()) {
+        for(Map.Entry<String, String> e : (schema.getQNamePrefixToNamespaceMap()).entrySet()) {
             if(excludePrefixes.containsKey(e.getKey()) || excludePrefixes.containsValue(e.getValue())) {
                 continue;
             }
@@ -189,13 +149,7 @@ public class GMLNotificationSerializer implements PublishCallbackMBean, CatalogL
         long start = System.nanoTime();
         boolean success = true;
         try {
-            long modCount = catalogModCount.get();
-            if(modCount != catalogModCountLocal.get().longValue()) {
-                catalogModCountLocal.set(modCount);
-                encoder.remove();
-            }
-            
-            final Encoder encoder = this.encoder.get();
+            final Encoder encoder = new Encoder(xmlConfig, xmlConfig.getXSD().getSchema());
 
             TransformerHandler handler = STF.newTransformerHandler();
             handler.setResult(new StreamResult(sw));
@@ -288,29 +242,6 @@ public class GMLNotificationSerializer implements PublishCallbackMBean, CatalogL
             new QName(typeName.getNamespaceURI(), typeName.getLocalPart(), catalog
                 .getNamespaceByURI(typeName.getNamespaceURI()).getPrefix());
         return qname;
-    }
-
-    @Override
-    public void handleAddEvent(CatalogAddEvent event) throws CatalogException {
-    }
-
-    @Override
-    public void handleModifyEvent(CatalogModifyEvent event) throws CatalogException {
-    }
-
-    @Override
-    public void handlePostModifyEvent(CatalogPostModifyEvent event) throws CatalogException {
-        catalogModCount.incrementAndGet();
-    }
-
-    @Override
-    public void handleRemoveEvent(CatalogRemoveEvent event) throws CatalogException {
-        catalogModCount.incrementAndGet();        
-    }
-
-    @Override
-    public void reloaded() {
-        catalogModCount.incrementAndGet();
     }
 
     @Override
