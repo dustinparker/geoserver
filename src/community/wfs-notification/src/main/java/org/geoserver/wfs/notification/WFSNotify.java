@@ -35,9 +35,12 @@ import org.geoserver.wfs.TransactionPlugin;
 import org.geoserver.wfs.WFSException;
 import org.geoserver.wfs.notification.TriggerManager.TriggerCallback;
 import org.geotools.data.FeatureSource;
+import org.geotools.data.FeatureStore;
+import org.geotools.data.store.ContentFeatureSource;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.feature.FeatureCollection;
 import org.geotools.feature.FeatureIterator;
+import org.geotools.jdbc.JDBCFeatureSource;
 import org.opengis.feature.Feature;
 import org.opengis.feature.simple.SimpleFeature;
 import org.opengis.feature.simple.SimpleFeatureType;
@@ -323,7 +326,7 @@ public class WFSNotify implements TransactionPlugin, TransactionListener, Dispos
     @Override
     public TransactionType beforeTransaction(TransactionType request) throws WFSException {
         try {
-            statuses.put(request, (TransactionStatus) new TransactionStatus());
+            statuses.put(request, new TransactionStatus());
         } catch(Throwable t) {
             handleException(t);
         }
@@ -358,14 +361,14 @@ public class WFSNotify implements TransactionPlugin, TransactionListener, Dispos
         try {
             TransactionStatus ts = statuses.get(request);
             if(ts != null) {
-                tryBeforeCommit(request, ts);
+                tryBeforeCommit(ts);
             }
         } catch(Throwable t) {
             handleException(t);
         }
     }
     
-    public void tryBeforeCommit(TransactionType request, final TransactionStatus ts) throws WFSException {
+    public void tryBeforeCommit(final TransactionStatus ts) throws IOException {
 
         // Rerun each query to be checked
         for(Entry<Name, Set<Identifier>> ent : ts.getAffected().entrySet()) {
@@ -373,51 +376,49 @@ public class WFSNotify implements TransactionPlugin, TransactionListener, Dispos
             for(Identifier id : ent.getValue()) {
                 features.add(ts.getFidMap().get(id));
             }
-            try {
-                tm.triggerEvent(new CollectionsFeatureIterator<Feature>(features.iterator()), new QName(ent.getKey().getNamespaceURI(), ent.getKey().getLocalPart()), new TriggerCallback() {
-                    @Override
-                    public void triggerEvent(Feature f) {
-                        if(ts.checkFeature(f)) {
-                            WFSNotify.this.triggerEvent(f);
-                        }
+            tm.triggerEvent(new CollectionsFeatureIterator<Feature>(features.iterator()), new QName(ent.getKey().getNamespaceURI(), ent.getKey().getLocalPart()), new TriggerCallback() {
+                @Override
+                public void triggerEvent(Feature f) {
+                    if(ts.checkFeature(f)) {
+                        WFSNotify.this.triggerEvent(f);
                     }
-                }, ts.getTransaction());
-            } catch(IOException e) {
-                LOG.debug("Error checking modified features, notifications will be inaccurate:", e);
-            }
+                }
+            }, ts.getTransaction());
         }
 
         // Check the remaining features in the ts map:
         for(Entry<Name, Set<Identifier>> ent : ts.getPotentiallyModified().entrySet()) {
+            if(ent.getValue().isEmpty()) {
+                continue; // Nothing to do...
+            }
+            FeatureTypeInfo info = catalog.getFeatureTypeByName(ent.getKey());
+            if(info == null) {
+                continue;
+            }
+
+
+            // Create a FID query for each type that's not empty, do the same as the above
+            Filter filter = FF.id(ent.getValue());
+
+            FeatureSource<? extends FeatureType, ? extends Feature> source = info.getFeatureSource(null, null);
+            if(source instanceof ContentFeatureSource) {
+                ((JDBCFeatureSource) source).setTransaction(ts.getTransaction());
+            } else if(source instanceof FeatureStore) {
+                ((FeatureStore) source).setTransaction(ts.getTransaction());
+            }
+            FeatureCollection<? extends FeatureType, ? extends Feature> coll = source.getFeatures(filter);
+            FeatureIterator<? extends Feature> i = coll.features();
+
             try {
-                if(ent.getValue().isEmpty()) {
-                    continue; // Nothing to do...
-                }
-                FeatureTypeInfo info = catalog.getFeatureTypeByName(ent.getKey());
-                if(info == null) {
-                    continue;
-                }
-
-
-                // Create a FID query for each type that's not empty, do the same as the above
-                Filter filter = FF.id(ent.getValue());
-
-                FeatureSource<? extends FeatureType, ? extends Feature> source = info.getFeatureSource(null, null);
-                FeatureCollection<? extends FeatureType, ? extends Feature> coll = source.getFeatures(filter);
-                FeatureIterator<? extends Feature> i = coll.features();
-                
-                try {
-                    while(i.hasNext()) {
-                        Feature f = i.next();
-                        if(ts.checkFeature(f)) {
-                            triggerEvent(f);
-                        }
+                while(i.hasNext()) {
+                    Feature f = i.next();
+                    if(ts.checkFeature(f)) {
+                        triggerEvent(f);
                     }
-                } finally {
-                    i.close();
                 }
-
-            } catch(IOException e) {}
+            } finally {
+                i.close();
+            }
         }
 
         // Delete anything left in the ts map
