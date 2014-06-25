@@ -117,7 +117,6 @@ public class GeoJSONGetFeatureResponse extends WFSGetFeatureOutputFormat {
         // prepare to write out
         OutputStreamWriter osw = null;
         Writer outWriter = null;
-        boolean hasGeom = false;
 
         // get feature count for request
         Integer featureCount = null; 
@@ -153,109 +152,12 @@ public class GeoJSONGetFeatureResponse extends WFSGetFeatureOutputFormat {
             //
             // execute should also fail if all of the locks could not be aquired
             List<FeatureCollection> resultsList = featureCollection.getFeature();
-            CoordinateReferenceSystem crs = null;
             for (int i = 0; i < resultsList.size(); i++) {
-                FeatureCollection collection = resultsList.get(i);
-                FeatureIterator iterator = collection.features();
-
-                
-                try {
-                    SimpleFeatureType fType;
-                    List<AttributeDescriptor> types;
-
-                    while (iterator.hasNext()) {
-                        SimpleFeature feature = (SimpleFeature) iterator.next();
-                        jsonWriter.object();
-                        jsonWriter.key("type").value("Feature");
-
-                        fType = feature.getFeatureType();
-                        types = fType.getAttributeDescriptors();
-
-                        if( id_option == null ){
-                            jsonWriter.key("id").value(feature.getID());
-                        }
-                        else if ( id_option.length() != 0){
-                            Object value = feature.getAttribute(id_option);
-                            jsonWriter.key("id").value(value);
-                        }
-                        GeometryDescriptor defaultGeomType = fType.getGeometryDescriptor();
-                        
-                        if (crs == null && defaultGeomType != null)
-                            crs = fType.getGeometryDescriptor().getCoordinateReferenceSystem();
-
-                        jsonWriter.key("geometry");
-                        Geometry aGeom = (Geometry) feature.getDefaultGeometry();
-
-                        if (aGeom == null) {
-                            // In case the default geometry is not set, we will
-                            // just use the first geometry we find
-                            for (int j = 0; j < types.size() && aGeom == null; j++) {
-                                Object value = feature.getAttribute(j);
-                                if (value != null && value instanceof Geometry) {
-                                    aGeom = (Geometry) value;
-                                }
-                            }
-                        }
-                        // Write the geometry, whether it is a null or not
-                        if (aGeom != null) {
-                            jsonWriter.writeGeom(aGeom);
-                            hasGeom = true;
-                        } else {
-                            jsonWriter.value(null);
-                        }
-                        if (defaultGeomType != null)
-                            jsonWriter.key("geometry_name").value(defaultGeomType.getLocalName());
-
-                        jsonWriter.key("properties");
-                        jsonWriter.object();
-
-                        for (int j = 0; j < types.size(); j++) {
-                            Object value = feature.getAttribute(j);
-                            AttributeDescriptor ad = types.get(j);
-                            
-                            if( id_option != null && id_option.equals(ad.getLocalName()) ){
-                            	continue; // skip this value as it is used as the id
-                            }
-                            if (value != null) {
-                                if (value instanceof Geometry) {
-                                    // This is an area of the spec where they
-                                    // decided to 'let convention evolve',
-                                    // that is how to handle multiple
-                                    // geometries. My take is to print the
-                                    // geometry here if it's not the default.
-                                    // If it's the default that you already
-                                    // printed above, so you don't need it here.
-                                    if (ad.equals(defaultGeomType)) {
-                                        // Do nothing, we wrote it above
-                                        // jsonWriter.value("geometry_name");
-                                    } else {
-                                        jsonWriter.key(ad.getLocalName());
-                                        jsonWriter.writeGeom((Geometry) value);
-                                    }
-                                } else {
-                                    jsonWriter.key(ad.getLocalName());
-                                    jsonWriter.value(value);
-                                }
-
-                            } else {
-                                jsonWriter.key(ad.getLocalName());
-                                jsonWriter.value(null);
-                            }
-                        }
-                        // Bounding box for feature in properties
-                        ReferencedEnvelope refenv = ReferencedEnvelope.reference(feature.getBounds());
-                        if (featureBounding && !refenv.isEmpty())
-                            jsonWriter.writeBoundingBox(refenv);
-
-                        jsonWriter.endObject(); // end the properties
-                        jsonWriter.endObject(); // end the feature
-                    }
-                } // catch an exception here?
-                finally {
-                    iterator.close();
-                }
+                jsonWriter.featureCollection(resultsList.get(i));
             }
             jsonWriter.endArray(); // end features
+            CoordinateReferenceSystem crs = jsonWriter.getCrs();
+            boolean hasGeom = jsonWriter.isHasGeometry();
 
             // Coordinate Referense System, currently only if the namespace is
             // EPSG
@@ -284,7 +186,7 @@ public class GeoJSONGetFeatureResponse extends WFSGetFeatureOutputFormat {
             if (hasGeom && featureBounding) {
                 ReferencedEnvelope e = null;
                 for (int i = 0; i < resultsList.size(); i++) {
-                    FeatureCollection collection = (FeatureCollection) resultsList.get(i);
+                    FeatureCollection collection = resultsList.get(i);
                     if (e == null) {
                         e = collection.getBounds();
                     } else {
@@ -328,8 +230,8 @@ public class GeoJSONGetFeatureResponse extends WFSGetFeatureOutputFormat {
      * 
      * Function gets the total number of features from a WFS 1.0.0 or WFS 1.1.0 request and returns it.
      * 
-     * @param Operation describeFeatureType
-     * @param WFSInfo wfs
+     * @param describeFeatureType
+     * @param wfs
      * @return int featurecount 
      * @throws IOException
      */
